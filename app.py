@@ -168,9 +168,9 @@ class VideoTransformer(VideoTransformerBase):
                 if self.ear < ear_thresh or self.mar > mar_thresh:
                     is_drowsy_mp = True
 
-        # 2. YOLO (Every 5 frames + lower resolution)
-        if self.frame_count % 5 == 0:
-            yolo_res = yolo_model.predict(source=img, conf=0.2, imgsz=320, verbose=False)[0]
+        # 2. YOLO (Every 3 frames for better responsiveness + original resolution)
+        if self.frame_count % 3 == 0:
+            yolo_res = yolo_model.predict(source=img, conf=0.15, imgsz=416, verbose=False)[0]
             self.last_yolo_drowsy = any(yolo_res.names[int(box.cls[0])].lower() == 'drowsy' for box in yolo_res.boxes)
         
         # 3. Decision Logic
