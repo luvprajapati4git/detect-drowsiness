@@ -6,6 +6,7 @@ import numpy as np
 import time
 from collections import deque
 import threading
+import gc
 try:
     import winsound
 except ImportError:
@@ -121,6 +122,8 @@ yolo_model = load_yolo()
 # --- State ---
 if 'history' not in st.session_state: st.session_state.history = deque([0.3]*50, maxlen=50)
 if 'last_sound_time' not in st.session_state: st.session_state.last_sound_time = 0
+if 'last_gc_time' not in st.session_state: st.session_state.last_gc_time = time.time()
+if 'last_chart_update' not in st.session_state: st.session_state.last_chart_update = 0
 
 with st.sidebar:
     st.markdown('<p class="sidebar-title">🛡️ GUARDIAN PRO</p>', unsafe_allow_html=True)
@@ -156,7 +159,7 @@ class VideoTransformer(VideoTransformerBase):
         img = frame.to_ndarray(format="bgr24")
         self.frame_count += 1
         
-        # 1. MediaPipe (Every 2 frames to save CPU)
+        # 1. MediaPipe (Every 2nd frame)
         is_drowsy_mp = False
         if self.frame_count % 2 == 0:
             rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
@@ -167,12 +170,14 @@ class VideoTransformer(VideoTransformerBase):
                 self.mar = get_mar(landmarks, MOUTH)
                 if self.ear < ear_thresh or self.mar > mar_thresh:
                     is_drowsy_mp = True
+            del rgb_img, mp_res # Memory cleanup
 
-        # 2. YOLO (Every 3 frames for better responsiveness + original resolution)
+        # 2. YOLO (Every 3rd frame)
         if self.frame_count % 3 == 0:
             yolo_res = yolo_model.predict(source=img, conf=0.15, imgsz=416, verbose=False)[0]
             self.last_yolo_drowsy = any(yolo_res.names[int(box.cls[0])].lower() == 'drowsy' for box in yolo_res.boxes)
-        
+            del yolo_res
+
         # 3. Decision Logic
         final_drowsy = is_drowsy_mp or self.last_yolo_drowsy
         curr = time.time()
@@ -180,16 +185,13 @@ class VideoTransformer(VideoTransformerBase):
         if final_drowsy:
             if self.d_start is None: self.d_start = curr
             self.elapsed = curr - self.d_start
-            if self.elapsed >= alert_delay:
-                self.status = "EMERGENCY"
-            else:
-                self.status = "WARNING"
+            self.status = "EMERGENCY" if self.elapsed >= alert_delay else "WARNING"
         else:
             self.d_start = None
             self.elapsed = 0.0
             self.status = "SECURE"
 
-        # Visual Overlays (Lightweight)
+        # Visual Overlays
         if self.status == "EMERGENCY":
             cv2.rectangle(img, (0,0), (img.shape[1], img.shape[0]), (0,0,255), 15)
         elif self.status == "WARNING":
@@ -237,6 +239,7 @@ with col_s:
 if run_system and ctx:
     while ctx.state.playing:
         if ctx.video_transformer:
+            curr_t = time.time()
             # Update UI from transformer state
             ear = ctx.video_transformer.ear
             mar = ctx.video_transformer.mar
@@ -246,24 +249,31 @@ if run_system and ctx:
             # Status Card
             if status == "EMERGENCY":
                 status_ui.markdown('<div class="status-card danger">🚨 EMERGENCY!</div>', unsafe_allow_html=True)
-                curr = time.time()
-                if (curr - st.session_state.last_sound_time) > 1.0:
+                if (curr_t - st.session_state.last_sound_time) > 1.0:
                     if enable_browser_sound: play_browser_audio()
                     if enable_local_sound: threading.Thread(target=play_local_beep, daemon=True).start()
-                    st.session_state.last_sound_time = curr
+                    st.session_state.last_sound_time = curr_t
             elif status == "WARNING":
                 status_ui.markdown(f'<div class="status-card warning-ui">⚠️ FATIGUE: {elapsed:.1f}s</div>', unsafe_allow_html=True)
             else:
                 status_ui.markdown('<div class="status-card safe">✅ SYSTEM SECURE</div>', unsafe_allow_html=True)
 
-            # Metrics & Chart (Throttled UI updates)
+            # Metrics
             ear_m.metric("EAR", f"{ear:.2f}")
             mar_m.metric("MAR", f"{mar:.2f}")
             timer_m.metric("TIMER", f"{elapsed:.1f}s")
             
-            st.session_state.history.append(ear)
-            chart_place.line_chart(list(st.session_state.history), height=150)
+            # Throttled Chart Update (Every 2 seconds)
+            if (curr_t - st.session_state.last_chart_update) > 2.0:
+                st.session_state.history.append(ear)
+                chart_place.line_chart(list(st.session_state.history), height=150)
+                st.session_state.last_chart_update = curr_t
+                
+            # Periodic Garbage Collection (Every 60s)
+            if (curr_t - st.session_state.last_gc_time) > 60:
+                gc.collect()
+                st.session_state.last_gc_time = curr_t
             
-        time.sleep(0.4) # Significantly reduced polling frequency
+        time.sleep(0.4) 
 else:
     status_ui.markdown('<div class="status-card safe">💤 SYSTEM INACTIVE</div>', unsafe_allow_html=True)
