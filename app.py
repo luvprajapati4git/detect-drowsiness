@@ -150,7 +150,6 @@ with col_s:
     m1, m2, m3 = st.columns(3)
     ear_m, mar_m, timer_m = m1.empty(), m2.empty(), m3.empty()
     st.markdown('</div>', unsafe_allow_html=True)
-    st.info("System optimized: Real-time graph removed for maximum CPU performance.")
 
 if run_system and ctx:
     while ctx.state.playing:
