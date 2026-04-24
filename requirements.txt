@@ -1,7 +1,7 @@
 streamlit
 ultralytics
 mediapipe==0.10.5
-opencv-python
+opencv-python-headless
 numpy
 scipy
 streamlit-webrtc
