@@ -75,7 +75,7 @@ with st.sidebar:
     st.markdown("### 🛡️ GUARDIAN PRO")
     ear_thresh = st.slider("Eye Closure (EAR)", 0.15, 0.35, 0.22)
     mar_thresh = st.slider("Yawn Detection (MAR)", 0.1, 0.8, 0.4)
-    alert_delay = st.slider("Trigger Delay (s)", 0.2, 3.0, 0.8)
+    alert_delay = st.slider("Trigger Delay (s)", 0.2, 3.0, 1.6)
     enable_browser_sound = st.checkbox("Browser Audio Alert", value=True)
     enable_local_sound = st.checkbox("Local System Beep", value=True)
     run_system = st.checkbox("Activate Monitoring", value=True)
