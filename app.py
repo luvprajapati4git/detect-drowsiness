@@ -33,8 +33,6 @@ st.markdown("""
     .danger { border: 2px solid #ff3366; color: #ff3366; background: rgba(255, 51, 102, 0.1); animation: pulse-danger 1.5s infinite; }
     @keyframes pulse-danger { 0% { transform: scale(1); } 50% { transform: scale(1.02); } 100% { transform: scale(1); } }
     [data-testid="stMetricValue"] { font-family: 'Orbitron', sans-serif; font-size: 1.6rem !important; color: #58a6ff !important; }
-    .calibration-alert { color: #58a6ff; font-weight: bold; animation: blinker 1.5s linear infinite; }
-    @keyframes blinker { 50% { opacity: 0; } }
 </style>
 """, unsafe_allow_html=True)
 
@@ -70,25 +68,13 @@ def play_browser_audio():
 def load_yolo(): return YOLO("best.pt")
 yolo_model = load_yolo()
 
-# --- Session State ---
 if 'last_sound_time' not in st.session_state: st.session_state.last_sound_time = 0
 if 'last_gc_time' not in st.session_state: st.session_state.last_gc_time = time.time()
-if 'ear_threshold' not in st.session_state: st.session_state.ear_threshold = 0.22
-if 'mar_threshold' not in st.session_state: st.session_state.mar_threshold = 0.4
-if 'calibration_trigger' not in st.session_state: st.session_state.calibration_trigger = False
 
 with st.sidebar:
     st.markdown("### 🛡️ GUARDIAN PRO")
-    
-    # Manual Override Sliders (linked to session state)
-    st.session_state.ear_threshold = st.slider("Eye Closure (EAR)", 0.15, 0.35, st.session_state.ear_threshold, format="%.3f")
-    st.session_state.mar_threshold = st.slider("Yawn Detection (MAR)", 0.1, 0.8, st.session_state.mar_threshold, format="%.3f")
-    
-    if st.button("🔄 AUTO CALIBRATE (5s)", use_container_width=True):
-        st.session_state.calibration_trigger = True
-        st.info("Calibration started! Keep eyes open & mouth closed.")
-
-    st.divider()
+    ear_thresh = st.slider("Eye Closure (EAR)", 0.15, 0.35, 0.22)
+    mar_thresh = st.slider("Yawn Detection (MAR)", 0.1, 0.8, 0.4)
     alert_delay = st.slider("Trigger Delay (s)", 0.2, 3.0, 1.6)
     enable_browser_sound = st.checkbox("Browser Audio Alert", value=True)
     enable_local_sound = st.checkbox("Local System Beep", value=True)
@@ -104,81 +90,40 @@ class VideoTransformer(VideoTransformerBase):
         self.frame_count = 0
         self.last_yolo_drowsy = False
         
-        # Calibration State
-        self.calibrating = False
-        self.calib_start = None
-        self.calib_ears = []
-        self.calib_mars = []
-        self.calib_finished = False
-        
     def transform(self, frame):
         img = frame.to_ndarray(format="bgr24")
         self.frame_count += 1
         
-        # Pull latest thresholds from session state
-        curr_ear_thresh = st.session_state.ear_threshold
-        curr_mar_thresh = st.session_state.mar_threshold
-        
-        # Check if calibration was triggered externally
-        if st.session_state.calibration_trigger and not self.calibrating:
-            self.calibrating = True
-            self.calib_start = time.time()
-            self.calib_ears = []
-            self.calib_mars = []
-            st.session_state.calibration_trigger = False # Reset trigger
-
-        # 1. MediaPipe (ALWAYS for calibration and detection)
+        # 1. MediaPipe (EVERY frame for accuracy)
         rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         mp_res = face_mesh.process(rgb_img)
         is_drowsy_mp = False
-        
         if mp_res.multi_face_landmarks:
             landmarks = mp_res.multi_face_landmarks[0].landmark
             self.ear = (get_ear(landmarks, LEFT_EYE) + get_ear(landmarks, RIGHT_EYE)) / 2.0
             self.mar = get_mar(landmarks, MOUTH)
-            
-            if self.calibrating:
-                self.calib_ears.append(self.ear)
-                self.calib_mars.append(self.mar)
-                # 5-second calibration window
-                if time.time() - self.calib_start > 5.0:
-                    avg_ear = np.mean(self.calib_ears)
-                    avg_mar = np.mean(self.calib_mars)
-                    # Set thresholds: 75% of open EAR, 150% of closed MAR
-                    st.session_state.ear_threshold = round(avg_ear * 0.75, 3)
-                    st.session_state.mar_threshold = round(avg_mar * 1.60, 3)
-                    self.calibrating = False
-                    self.calib_finished = True
-            
-            if not self.calibrating and (self.ear < curr_ear_thresh or self.mar > curr_mar_thresh):
+            if self.ear < ear_thresh or self.mar > mar_thresh:
                 is_drowsy_mp = True
         
-        # 2. YOLO (Only if not calibrating)
-        if not self.calibrating and self.frame_count % 2 == 0:
+        # 2. YOLO (Every 2nd frame + Full Precision 416)
+        if self.frame_count % 2 == 0:
             yolo_res = yolo_model.predict(source=img, conf=0.15, imgsz=416, verbose=False)[0]
             self.last_yolo_drowsy = any(yolo_res.names[int(box.cls[0])].lower() == 'drowsy' for box in yolo_res.boxes)
             del yolo_res
 
         # 3. Logic
-        if self.calibrating:
-            self.status = "CALIBRATING"
+        final_drowsy = is_drowsy_mp or self.last_yolo_drowsy
+        curr = time.time()
+        if final_drowsy:
+            if self.d_start is None: self.d_start = curr
+            self.elapsed = curr - self.d_start
+            self.status = "EMERGENCY" if self.elapsed >= alert_delay else "WARNING"
         else:
-            final_drowsy = is_drowsy_mp or self.last_yolo_drowsy
-            curr = time.time()
-            if final_drowsy:
-                if self.d_start is None: self.d_start = curr
-                self.elapsed = curr - self.d_start
-                self.status = "EMERGENCY" if self.elapsed >= alert_delay else "WARNING"
-            else:
-                self.d_start = None
-                self.elapsed = 0.0
-                self.status = "SECURE"
+            self.d_start = None
+            self.elapsed = 0.0
+            self.status = "SECURE"
 
-        # Overlays
-        if self.calibrating:
-            cv2.putText(img, f"CALIBRATING: {5.0 - (time.time()-self.calib_start):.1f}s", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
-            cv2.rectangle(img, (0,0), (img.shape[1], img.shape[0]), (255,255,0), 10)
-        elif self.status == "EMERGENCY":
+        if self.status == "EMERGENCY":
             cv2.rectangle(img, (0,0), (img.shape[1], img.shape[0]), (0,0,255), 15)
         elif self.status == "WARNING":
             cv2.rectangle(img, (0,0), (img.shape[1], img.shape[0]), (0,255,255), 10)
@@ -212,9 +157,7 @@ if run_system and ctx:
             curr_t = time.time()
             ear, mar, elapsed, status = ctx.video_transformer.ear, ctx.video_transformer.mar, ctx.video_transformer.elapsed, ctx.video_transformer.status
             
-            if status == "CALIBRATING":
-                status_ui.markdown('<div class="status-card" style="border:1px solid #58a6ff; color:#58a6ff;">⚖️ CALIBRATING...</div>', unsafe_allow_html=True)
-            elif status == "EMERGENCY":
+            if status == "EMERGENCY":
                 status_ui.markdown('<div class="status-card danger">🚨 EMERGENCY!</div>', unsafe_allow_html=True)
                 if (curr_t - st.session_state.last_sound_time) > 1.0:
                     if enable_browser_sound: play_browser_audio()
@@ -225,14 +168,9 @@ if run_system and ctx:
             else:
                 status_ui.markdown('<div class="status-card safe">✅ SYSTEM SECURE</div>', unsafe_allow_html=True)
 
-            ear_m.metric("EAR", f"{ear:.3f}")
-            mar_m.metric("MAR", f"{mar:.3f}")
+            ear_m.metric("EAR", f"{ear:.2f}")
+            mar_m.metric("MAR", f"{mar:.2f}")
             timer_m.metric("TIMER", f"{elapsed:.1f}s")
-            
-            if ctx.video_transformer.calib_finished:
-                st.success(f"Calibration Done! EAR: {st.session_state.ear_threshold} | MAR: {st.session_state.mar_threshold}")
-                ctx.video_transformer.calib_finished = False # Reset local flag
-                st.rerun() # Force UI refresh to update sliders
                 
             if (curr_t - st.session_state.last_gc_time) > 60:
                 gc.collect()
