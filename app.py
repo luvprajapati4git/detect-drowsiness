@@ -202,7 +202,11 @@ with col_v:
         ctx = webrtc_streamer(
             key="guardian-ai",
             mode=WebRtcMode.SENDRECV,
-            rtc_configuration=RTCConfiguration({"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}),
+            rtc_configuration={
+                "iceServers": [
+                    {"urls": ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302", "stun:stun2.l.google.com:19302"]}
+                ]
+            },
             video_transformer_factory=VideoTransformer,
             async_transform=True,
         )
