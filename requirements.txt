@@ -1,0 +1,7 @@
+streamlit
+ultralytics
+mediapipe==0.10.5
+opencv-python
+numpy
+scipy
+streamlit-webrtc
