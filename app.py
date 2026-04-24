@@ -226,33 +226,39 @@ with col_s:
     chart_place = st.empty()
     st.markdown('</div>', unsafe_allow_html=True)
 
-# --- Dynamic Updates ---
-if run_system and ctx and ctx.video_transformer:
-    # Update UI from transformer state
-    ear = ctx.video_transformer.ear
-    mar = ctx.video_transformer.mar
-    elapsed = ctx.video_transformer.elapsed
-    status = ctx.video_transformer.status
-    
-    # Status Card
-    if status == "EMERGENCY":
-        status_ui.markdown('<div class="status-card danger">🚨 EMERGENCY!</div>', unsafe_allow_html=True)
-        # Handle Sound (Streamlit main thread)
-        curr = time.time()
-        if (curr - st.session_state.last_sound_time) > 0.6:
-            if enable_browser_sound: play_browser_audio()
-            if enable_local_sound: threading.Thread(target=play_local_beep, daemon=True).start()
-            st.session_state.last_sound_time = curr
-    elif status == "WARNING":
-        status_ui.markdown(f'<div class="status-card warning-ui">⚠️ FATIGUE: {elapsed:.1f}s</div>', unsafe_allow_html=True)
-    else:
-        status_ui.markdown('<div class="status-card safe">✅ SYSTEM SECURE</div>', unsafe_allow_html=True)
+# --- Dynamic Updates (Polling Loop) ---
+if run_system and ctx:
+    while ctx.state.playing:
+        if ctx.video_transformer:
+            # Update UI from transformer state
+            ear = ctx.video_transformer.ear
+            mar = ctx.video_transformer.mar
+            elapsed = ctx.video_transformer.elapsed
+            status = ctx.video_transformer.status
+            
+            # Status Card
+            if status == "EMERGENCY":
+                status_ui.markdown('<div class="status-card danger">🚨 EMERGENCY!</div>', unsafe_allow_html=True)
+                # Handle Sound (Browser-side)
+                curr = time.time()
+                if (curr - st.session_state.last_sound_time) > 1.0:
+                    if enable_browser_sound: play_browser_audio()
+                    if enable_local_sound: threading.Thread(target=play_local_beep, daemon=True).start()
+                    st.session_state.last_sound_time = curr
+            elif status == "WARNING":
+                status_ui.markdown(f'<div class="status-card warning-ui">⚠️ FATIGUE: {elapsed:.1f}s</div>', unsafe_allow_html=True)
+            else:
+                status_ui.markdown('<div class="status-card safe">✅ SYSTEM SECURE</div>', unsafe_allow_html=True)
 
-    # Metrics & Chart
-    ear_m.metric("EAR", f"{ear:.2f}")
-    mar_m.metric("MAR", f"{mar:.2f}")
-    timer_m.metric("TIMER", f"{elapsed:.1f}s")
-    st.session_state.history.append(ear)
-    chart_place.line_chart(list(st.session_state.history), height=150)
+            # Metrics & Chart
+            ear_m.metric("EAR", f"{ear:.2f}")
+            mar_m.metric("MAR", f"{mar:.2f}")
+            timer_m.metric("TIMER", f"{elapsed:.1f}s")
+            
+            # Update history for chart
+            st.session_state.history.append(ear)
+            chart_place.line_chart(list(st.session_state.history), height=150)
+            
+        time.sleep(0.1) # Prevent CPU over-usage
 else:
     status_ui.markdown('<div class="status-card safe">💤 SYSTEM INACTIVE</div>', unsafe_allow_html=True)
