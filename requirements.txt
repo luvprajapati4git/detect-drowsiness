@@ -2,7 +2,6 @@ streamlit
 ultralytics
 mediapipe>=0.10.30
 protobuf<4.0.0
-opencv-python-headless
 numpy
 scipy
 streamlit-webrtc
