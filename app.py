@@ -68,9 +68,8 @@ def play_browser_audio():
 def load_yolo(): return YOLO("best.pt")
 yolo_model = load_yolo()
 
-if 'history' not in st.session_state: st.session_state.history = deque([0.3]*50, maxlen=50)
 if 'last_sound_time' not in st.session_state: st.session_state.last_sound_time = 0
-if 'last_chart_update' not in st.session_state: st.session_state.last_chart_update = 0
+if 'last_gc_time' not in st.session_state: st.session_state.last_gc_time = time.time()
 
 with st.sidebar:
     st.markdown("### 🛡️ GUARDIAN PRO")
@@ -150,9 +149,8 @@ with col_s:
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
     m1, m2, m3 = st.columns(3)
     ear_m, mar_m, timer_m = m1.empty(), m2.empty(), m3.empty()
-    st.markdown('</div><div class="glass-card">### Eye Aspect Ratio Trend', unsafe_allow_html=True)
-    chart_place = st.empty()
     st.markdown('</div>', unsafe_allow_html=True)
+    st.info("System optimized: Real-time graph removed for maximum CPU performance.")
 
 if run_system and ctx:
     while ctx.state.playing:
@@ -174,13 +172,10 @@ if run_system and ctx:
             ear_m.metric("EAR", f"{ear:.2f}")
             mar_m.metric("MAR", f"{mar:.2f}")
             timer_m.metric("TIMER", f"{elapsed:.1f}s")
-            
-            # THROTTLED UI (Every 3 seconds) - This solves lag without touching AI accuracy
-            if (curr_t - st.session_state.last_chart_update) > 3.0:
-                st.session_state.history.append(ear)
-                chart_place.line_chart(list(st.session_state.history), height=150)
-                st.session_state.last_chart_update = curr_t
+                
+            if (curr_t - st.session_state.last_gc_time) > 60:
                 gc.collect()
+                st.session_state.last_gc_time = curr_t
             
         time.sleep(0.5) 
 else:
