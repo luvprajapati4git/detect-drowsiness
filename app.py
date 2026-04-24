@@ -149,27 +149,32 @@ class VideoTransformer(VideoTransformerBase):
         self.mar = 0.1
         self.elapsed = 0.0
         self.status = "SECURE"
+        self.frame_count = 0
+        self.last_yolo_drowsy = False
         
     def transform(self, frame):
         img = frame.to_ndarray(format="bgr24")
-        rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        self.frame_count += 1
         
-        # 1. MediaPipe
-        mp_res = face_mesh.process(rgb_img)
+        # 1. MediaPipe (Every 2 frames to save CPU)
         is_drowsy_mp = False
-        if mp_res.multi_face_landmarks:
-            landmarks = mp_res.multi_face_landmarks[0].landmark
-            self.ear = (get_ear(landmarks, LEFT_EYE) + get_ear(landmarks, RIGHT_EYE)) / 2.0
-            self.mar = get_mar(landmarks, MOUTH)
-            if self.ear < ear_thresh or self.mar > mar_thresh:
-                is_drowsy_mp = True
+        if self.frame_count % 2 == 0:
+            rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            mp_res = face_mesh.process(rgb_img)
+            if mp_res.multi_face_landmarks:
+                landmarks = mp_res.multi_face_landmarks[0].landmark
+                self.ear = (get_ear(landmarks, LEFT_EYE) + get_ear(landmarks, RIGHT_EYE)) / 2.0
+                self.mar = get_mar(landmarks, MOUTH)
+                if self.ear < ear_thresh or self.mar > mar_thresh:
+                    is_drowsy_mp = True
 
-        # 2. YOLO
-        yolo_res = yolo_model.predict(source=img, conf=0.15, imgsz=416, verbose=False)[0]
-        is_drowsy_yolo = any(yolo_res.names[int(box.cls[0])].lower() == 'drowsy' for box in yolo_res.boxes)
+        # 2. YOLO (Every 5 frames + lower resolution)
+        if self.frame_count % 5 == 0:
+            yolo_res = yolo_model.predict(source=img, conf=0.2, imgsz=320, verbose=False)[0]
+            self.last_yolo_drowsy = any(yolo_res.names[int(box.cls[0])].lower() == 'drowsy' for box in yolo_res.boxes)
         
         # 3. Decision Logic
-        final_drowsy = is_drowsy_mp or is_drowsy_yolo
+        final_drowsy = is_drowsy_mp or self.last_yolo_drowsy
         curr = time.time()
         
         if final_drowsy:
@@ -177,8 +182,6 @@ class VideoTransformer(VideoTransformerBase):
             self.elapsed = curr - self.d_start
             if self.elapsed >= alert_delay:
                 self.status = "EMERGENCY"
-                # Visual Alert
-                cv2.rectangle(img, (0,0), (img.shape[1], img.shape[0]), (0,0,255), 20)
             else:
                 self.status = "WARNING"
         else:
@@ -186,11 +189,13 @@ class VideoTransformer(VideoTransformerBase):
             self.elapsed = 0.0
             self.status = "SECURE"
 
-        ann_img = yolo_res.plot()
+        # Visual Overlays (Lightweight)
         if self.status == "EMERGENCY":
-            cv2.rectangle(ann_img, (0,0), (img.shape[1], img.shape[0]), (0,0,255), 20)
+            cv2.rectangle(img, (0,0), (img.shape[1], img.shape[0]), (0,0,255), 15)
+        elif self.status == "WARNING":
+            cv2.rectangle(img, (0,0), (img.shape[1], img.shape[0]), (0,255,255), 10)
             
-        return ann_img
+        return img
 
 # --- Layout ---
 st.title("🛡️ Guardian AI Monitoring")
@@ -203,9 +208,11 @@ with col_v:
             key="guardian-ai",
             mode=WebRtcMode.SENDRECV,
             rtc_configuration={
-                "iceServers": [
-                    {"urls": ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302", "stun:stun2.l.google.com:19302"]}
-                ]
+                "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
+            },
+            media_stream_constraints={
+                "video": {"width": 640, "height": 480, "frameRate": 15},
+                "audio": False
             },
             video_transformer_factory=VideoTransformer,
             async_transform=True,
@@ -239,7 +246,6 @@ if run_system and ctx:
             # Status Card
             if status == "EMERGENCY":
                 status_ui.markdown('<div class="status-card danger">🚨 EMERGENCY!</div>', unsafe_allow_html=True)
-                # Handle Sound (Browser-side)
                 curr = time.time()
                 if (curr - st.session_state.last_sound_time) > 1.0:
                     if enable_browser_sound: play_browser_audio()
@@ -250,15 +256,14 @@ if run_system and ctx:
             else:
                 status_ui.markdown('<div class="status-card safe">✅ SYSTEM SECURE</div>', unsafe_allow_html=True)
 
-            # Metrics & Chart
+            # Metrics & Chart (Throttled UI updates)
             ear_m.metric("EAR", f"{ear:.2f}")
             mar_m.metric("MAR", f"{mar:.2f}")
             timer_m.metric("TIMER", f"{elapsed:.1f}s")
             
-            # Update history for chart
             st.session_state.history.append(ear)
             chart_place.line_chart(list(st.session_state.history), height=150)
             
-        time.sleep(0.1) # Prevent CPU over-usage
+        time.sleep(0.4) # Significantly reduced polling frequency
 else:
     status_ui.markdown('<div class="status-card safe">💤 SYSTEM INACTIVE</div>', unsafe_allow_html=True)
